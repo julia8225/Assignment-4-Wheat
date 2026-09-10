@@ -1,0 +1,352 @@
+---
+title: "Assignment 4: Wheat Data Exploration and Basic Statistical Analysis"
+author: "Julia Jainarine"
+date: "September 10, 2026"
+output:
+  word_document:
+    toc: true
+    toc_depth: 2
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE,
+  message = FALSE,
+  fig.align = "center",
+  dpi = 300
+)
+options(scipen = 999)
+```
+
+# Research question and hypothesis
+
+The goal of this study is to determine whether wheat yield can be predicted from six measurements taken during the growing season: the number of overwintering plants, the number of ears, soil pH, phosphorus, potassium, and magnesium.
+
+**Research hypothesis:** Wheat yield is associated with at least one of the six measured biological or soil variables. A model containing these variables will predict yield better than a model containing no predictors.
+
+**Null hypothesis:** None of the six predictors is associated with wheat yield after the other predictors are held constant. In a multiple linear regression, this means that all six predictor slopes equal zero.
+
+# Variables
+
+The response variable is `yield`. The six focal predictors are `winter`, `ears`, `pH`, `P`, `K`, and `Mg`. There are no separately designated covariates because the study treats all six measured variables as predictors of interest.
+
+| Variable | Study meaning | Role | Variable type |
+|:--|:--|:--|:--|
+| `yield` | Wheat yield at harvest (t/ha) | Response | Numerical, continuous |
+| `winter` | Mean overwintering plants per m2 | Focal predictor | Numerical, count/density |
+| `ears` | Mean ears per m2 | Focal predictor | Numerical, count/density |
+| `pH` | Soil pH | Focal predictor | Numerical, continuous |
+| `P` | Soil phosphorus (mg/kg) | Focal predictor | Numerical, continuous |
+| `K` | Soil potassium (mg/kg) | Focal predictor | Numerical, continuous |
+| `Mg` | Soil magnesium (mg/kg) | Focal predictor | Numerical, continuous |
+
+No categorical or ordinal variables are included in this dataset.
+
+# Import and check the data
+
+```{r import-data}
+# The R Markdown file and wheat.csv must be saved in the same folder.
+if (!file.exists("wheat.csv")) {
+  stop("wheat.csv was not found. Put wheat.csv in the same folder as this Rmd file.")
+}
+
+wheat <- read.csv("wheat.csv", header = TRUE)
+
+required_columns <- c("yield", "winter", "ears", "pH", "P", "K", "Mg")
+if (!all(required_columns %in% names(wheat))) {
+  stop("The CSV column names do not match the expected wheat dataset.")
+}
+
+# Keep the variables in the order used in the assignment.
+wheat <- wheat[required_columns]
+
+dim(wheat)
+head(wheat)
+str(wheat)
+```
+
+The data contain `r nrow(wheat)` plots and `r ncol(wheat)` variables. Every variable was imported as numerical.
+
+```{r missing-values}
+missing_table <- data.frame(
+  Variable = names(wheat),
+  Missing_values = colSums(is.na(wheat))
+)
+knitr::kable(missing_table, caption = "Missing values in each variable")
+```
+
+There are `r sum(is.na(wheat))` missing values in the dataset, so all observations can be used in the analyses below.
+
+# Descriptive statistics
+
+```{r summary-output}
+summary(wheat)
+```
+
+```{r descriptive-table}
+descriptive_statistics <- data.frame(
+  Variable = names(wheat),
+  N = sapply(wheat, function(x) sum(!is.na(x))),
+  Mean = sapply(wheat, mean, na.rm = TRUE),
+  SD = sapply(wheat, sd, na.rm = TRUE),
+  Minimum = sapply(wheat, min, na.rm = TRUE),
+  Q1 = sapply(wheat, quantile, probs = 0.25, na.rm = TRUE),
+  Median = sapply(wheat, median, na.rm = TRUE),
+  Q3 = sapply(wheat, quantile, probs = 0.75, na.rm = TRUE),
+  Maximum = sapply(wheat, max, na.rm = TRUE),
+  Missing = sapply(wheat, function(x) sum(is.na(x)))
+)
+
+numeric_columns <- 3:ncol(descriptive_statistics)
+descriptive_statistics[numeric_columns] <- round(
+  descriptive_statistics[numeric_columns], 3
+)
+
+knitr::kable(
+  descriptive_statistics,
+  row.names = FALSE,
+  caption = "Descriptive statistics for the wheat data"
+)
+```
+
+Yield ranges from `r min(wheat$yield)` to `r max(wheat$yield)` t/ha, with a mean of `r round(mean(wheat$yield), 3)` t/ha. The predictor ranges are broad enough to compare plots with different plant densities and soil conditions.
+
+# Visual exploration of every variable
+
+## Histograms
+
+```{r histograms, fig.width=7, fig.height=9}
+old_par <- par(mfrow = c(4, 2), mar = c(4, 4, 3, 1))
+
+for (v in names(wheat)) {
+  hist(
+    wheat[[v]],
+    main = paste("Distribution of", v),
+    xlab = v,
+    col = "lightsteelblue",
+    border = "white"
+  )
+}
+
+plot.new()
+par(old_par)
+```
+
+The histograms show that most variables are reasonably centered without extreme gaps. Potassium (`K`) is strongly right-skewed because a few plots have much higher potassium values than the rest. Phosphorus and magnesium also have some higher values. Yield is roughly unimodal, although the smallest yield value is separated somewhat from most observations.
+
+## Boxplots and possible outliers
+
+```{r boxplots, fig.width=7, fig.height=9}
+old_par <- par(mfrow = c(4, 2), mar = c(4, 4, 3, 1))
+
+for (v in names(wheat)) {
+  boxplot(
+    wheat[[v]],
+    main = paste("Boxplot of", v),
+    ylab = v,
+    col = "wheat",
+    border = "gray30"
+  )
+  stripchart(
+    wheat[[v]],
+    method = "jitter",
+    vertical = TRUE,
+    add = TRUE,
+    pch = 16,
+    col = rgb(0.15, 0.25, 0.45, 0.45)
+  )
+}
+
+plot.new()
+par(old_par)
+```
+
+```{r outlier-table}
+outlier_rows <- do.call(
+  rbind,
+  lapply(names(wheat), function(v) {
+    x <- wheat[[v]]
+    limits <- boxplot.stats(x)$stats[c(1, 5)]
+    rows <- which(x < limits[1] | x > limits[2])
+    if (length(rows) == 0) return(NULL)
+    data.frame(Variable = v, Row = rows, Value = x[rows])
+  })
+)
+
+knitr::kable(
+  outlier_rows,
+  row.names = FALSE,
+  caption = "Possible outliers flagged by the standard boxplot rule"
+)
+```
+
+The boxplots flag possible unusual values in several variables. The clearest pattern is the group of high potassium values, including values of 324 and 282 mg/kg. The data also contain a low yield value, a high ears value, high pH values, a high phosphorus value, and a few high magnesium values. These observations should be checked for data-entry or measurement problems, but they should not be deleted only because a boxplot labels them as outliers.
+
+# Pairwise scatterplots involving the response
+
+```{r response-scatterplots, fig.width=7, fig.height=7}
+predictors <- c("winter", "ears", "pH", "P", "K", "Mg")
+old_par <- par(mfrow = c(2, 3), mar = c(4, 4, 3, 1))
+
+for (v in predictors) {
+  plot(
+    wheat[[v]], wheat$yield,
+    xlab = v,
+    ylab = "Yield (t/ha)",
+    main = paste("Yield vs", v),
+    pch = 19,
+    col = rgb(0.10, 0.35, 0.60, 0.60)
+  )
+  simple_model <- lm(yield ~ x, data = data.frame(
+    yield = wheat$yield,
+    x = wheat[[v]]
+  ))
+  abline(simple_model, col = "firebrick", lwd = 2)
+}
+
+par(old_par)
+```
+
+The clearest bivariate pattern is a positive association between `winter` and yield: plots with more overwintering plants tend to have higher yield. The association between `ears` and yield is positive but weaker. The plots for pH, phosphorus, potassium, and magnesium show weak relationships with yield when each predictor is viewed alone. Potassium also shows several high-value observations.
+
+# Complete scatterplot matrix
+
+```{r scatterplot-matrix, fig.width=7, fig.height=7}
+pairs(
+  wheat,
+  pch = 19,
+  col = rgb(0.10, 0.35, 0.60, 0.40),
+  main = "Scatterplot matrix for all wheat variables"
+)
+```
+
+The scatterplot matrix confirms the positive relationship between `winter` and yield. It also shows a strong positive association between pH and phosphorus. Other predictor pairs show weaker associations. The high potassium observations are visible across several panels and may have substantial leverage in analyses involving potassium.
+
+# Correlation matrix
+
+```{r correlation-matrix}
+correlation_matrix <- cor(wheat, use = "complete.obs", method = "pearson")
+knitr::kable(
+  round(correlation_matrix, 3),
+  caption = "Pearson correlation matrix"
+)
+```
+
+```{r correlation-heatmap, fig.width=7, fig.height=6}
+heatmap(
+  correlation_matrix,
+  Rowv = NA,
+  Colv = NA,
+  scale = "none",
+  margins = c(7, 7),
+  col = colorRampPalette(c("firebrick", "white", "steelblue"))(100),
+  main = "Correlation matrix heatmap"
+)
+```
+
+The strongest correlation with yield is for `winter` (`r round(correlation_matrix["yield", "winter"], 3)`). The correlation between yield and `ears` is weaker (`r round(correlation_matrix["yield", "ears"], 3)`). All other correlations with yield have small absolute values. The largest predictor-predictor correlation is between pH and phosphorus (`r round(correlation_matrix["pH", "P"], 3)`), which means those two predictors contain overlapping information.
+
+# Basic statistical analysis
+
+## Individual Pearson correlations with yield
+
+```{r correlation-tests}
+correlation_tests <- do.call(
+  rbind,
+  lapply(predictors, function(v) {
+    test <- cor.test(wheat$yield, wheat[[v]], method = "pearson")
+    data.frame(
+      Predictor = v,
+      Correlation = unname(test$estimate),
+      P_value = test$p.value
+    )
+  })
+)
+
+correlation_tests$Correlation <- round(correlation_tests$Correlation, 3)
+correlation_tests$P_value <- signif(correlation_tests$P_value, 3)
+
+knitr::kable(
+  correlation_tests,
+  row.names = FALSE,
+  caption = "Individual Pearson correlations with wheat yield"
+)
+```
+
+When each predictor is tested by itself, `winter` has the clearest association with yield. These correlations do not adjust for the other predictors, so a multiple regression is also needed.
+
+## Multiple linear regression
+
+```{r multiple-regression}
+wheat_model <- lm(yield ~ winter + ears + pH + P + K + Mg, data = wheat)
+summary(wheat_model)
+anova(wheat_model)
+```
+
+The overall regression model is statistically significant, *F*(`r length(predictors)`, `r df.residual(wheat_model)`) = `r round(summary(wheat_model)$fstatistic[1], 3)`, *p* = `r format.pval(pf(summary(wheat_model)$fstatistic[1], summary(wheat_model)$fstatistic[2], summary(wheat_model)$fstatistic[3], lower.tail = FALSE), digits = 3)`. Together, the six predictors explain `r round(100 * summary(wheat_model)$r.squared, 1)`% of the variation in wheat yield. The adjusted R-squared is `r round(summary(wheat_model)$adj.r.squared, 3)`.
+
+After all other predictors are held constant, `winter` has a statistically significant positive slope (*b* = `r round(coef(wheat_model)["winter"], 4)`, *p* < 0.001). An increase of 100 overwintering plants per m2 is associated with an estimated increase of about `r round(100 * coef(wheat_model)["winter"], 3)` t/ha in yield, holding the other variables constant. The p-values for `ears` and potassium are close to 0.05, but neither is below the conventional 0.05 cutoff in this model. pH, phosphorus, and magnesium are also not statistically significant after adjustment for the other predictors.
+
+Because the data are observational, these results show associations and predictive relationships. They do not by themselves prove that changing a predictor would cause yield to change.
+
+## Collinearity check
+
+```{r vif-check}
+# Base-R calculation of variance inflation factors (VIFs).
+vif_values <- sapply(predictors, function(v) {
+  other_predictors <- setdiff(predictors, v)
+  auxiliary_formula <- reformulate(other_predictors, response = v)
+  auxiliary_model <- lm(auxiliary_formula, data = wheat)
+  1 / (1 - summary(auxiliary_model)$r.squared)
+})
+
+vif_table <- data.frame(
+  Predictor = predictors,
+  VIF = round(vif_values, 3)
+)
+
+knitr::kable(vif_table, row.names = FALSE, caption = "Variance inflation factors")
+```
+
+All VIF values are well below 5. The pH and phosphorus VIFs are somewhat higher than the others because those variables are correlated, but the values do not indicate severe multicollinearity.
+
+## Regression diagnostic plots
+
+```{r regression-diagnostics, fig.width=7, fig.height=7}
+old_par <- par(mfrow = c(2, 2))
+plot(wheat_model)
+par(old_par)
+```
+
+```{r influence-check}
+diagnostic_table <- data.frame(
+  Row = seq_len(nrow(wheat)),
+  Studentized_residual = rstudent(wheat_model),
+  Cooks_distance = cooks.distance(wheat_model)
+)
+
+flagged_diagnostics <- diagnostic_table[
+  abs(diagnostic_table$Studentized_residual) > 3 |
+    diagnostic_table$Cooks_distance > 4 / nrow(wheat),
+]
+
+flagged_diagnostics$Studentized_residual <- round(
+  flagged_diagnostics$Studentized_residual, 3
+)
+flagged_diagnostics$Cooks_distance <- round(
+  flagged_diagnostics$Cooks_distance, 3
+)
+
+knitr::kable(
+  flagged_diagnostics,
+  row.names = FALSE,
+  caption = "Observations flagged for closer diagnostic inspection"
+)
+```
+
+The residual plots do not show a major curved pattern, and the normal Q-Q plot is reasonably close to a straight line. Row 6 has a studentized residual slightly larger than 3 in absolute value. Several rows exceed the common Cook's distance screening rule of 4/n, but no Cook's distance is close to 1. These plots suggest checking the flagged rows and reporting them, not automatically removing them.
+
+# Conclusion
+
+The results support the broad research hypothesis that at least one measured variable is associated with wheat yield. The complete six-predictor model is statistically significant and explains about `r round(100 * summary(wheat_model)$r.squared, 1)`% of the observed yield variation. The number of overwintering plants is the clearest predictor and has a positive relationship with yield. The other variables provide weaker evidence once all predictors are analyzed together. The model has moderate predictive value, but most yield variation remains unexplained, so additional biological, environmental, or management variables may improve prediction.
